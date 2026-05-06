@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "RadioPlayer",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
             name: "RadioPlayer",

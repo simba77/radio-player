@@ -6,16 +6,16 @@ final class StationStore: ObservableObject {
         didSet { save() }
     }
 
-    private let defaultsKey = "savedStations"
+    private static let defaultsKey = "savedStations"
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: "savedStations"),
+        if let data = UserDefaults.standard.data(forKey: Self.defaultsKey),
            let decoded = try? JSONDecoder().decode([Station].self, from: data),
            !decoded.isEmpty
         {
             stations = decoded
         } else {
-            stations = defaultStations
+            stations = Station.defaults
         }
     }
 
@@ -24,12 +24,16 @@ final class StationStore: ObservableObject {
     }
 
     func reset() {
-        stations = defaultStations
+        stations = Station.defaults
+    }
+
+    func move(from source: IndexSet, to destination: Int) {
+        stations.move(fromOffsets: source, toOffset: destination)
     }
 
     private func save() {
         if let data = try? JSONEncoder().encode(stations) {
-            UserDefaults.standard.set(data, forKey: defaultsKey)
+            UserDefaults.standard.set(data, forKey: Self.defaultsKey)
         }
     }
 }

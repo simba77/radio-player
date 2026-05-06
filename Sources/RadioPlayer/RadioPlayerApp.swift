@@ -2,7 +2,14 @@ import SwiftUI
 
 @main
 struct RadioPlayerApp: App {
-    @StateObject private var player = PlayerManager()
+    @StateObject private var store: StationStore
+    @StateObject private var player: PlayerManager
+
+    init() {
+        let store = StationStore()
+        _store = StateObject(wrappedValue: store)
+        _player = StateObject(wrappedValue: PlayerManager(store: store))
+    }
 
     var body: some Scene {
         MenuBarExtra {
@@ -17,7 +24,7 @@ struct RadioPlayerApp: App {
 
         Window("Настройки", id: "settings") {
             SettingsView()
-                .environmentObject(player.store)
+                .environmentObject(store)
         }
         .windowResizability(.contentSize)
     }

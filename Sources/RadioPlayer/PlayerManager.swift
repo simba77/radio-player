@@ -7,7 +7,7 @@ private struct SendableMetadataItem: @unchecked Sendable {
 }
 
 private final class MetadataDelegate: NSObject, AVPlayerItemMetadataOutputPushDelegate {
-    nonisolated(unsafe) var onMetadata: (String?, String?) -> Void = { _, _ in }
+    nonisolated(unsafe) weak var owner: PlayerManager?
 
     func metadataOutput(_ output: AVPlayerItemMetadataOutput,
                         didOutputTimedMetadataGroups groups: [AVTimedMetadataGroup],
@@ -22,7 +22,7 @@ private final class MetadataDelegate: NSObject, AVPlayerItemMetadataOutputPushDe
         Task {
             let title = (try? await titleRef?.item.load(.stringValue))?.trimmingCharacters(in: .whitespaces)
             let artist = (try? await artistRef?.item.load(.stringValue))?.trimmingCharacters(in: .whitespaces)
-            await MainActor.run { self.onMetadata(artist, title) }
+            await owner?.handleMetadata(artist: artist, title: title)
         }
     }
 }
@@ -36,19 +36,29 @@ final class PlayerManager: ObservableObject {
     @Published var currentArtist: String?
     @Published var currentTrack: String?
 
-    let store = StationStore()
+    var formattedTrack: String? {
+        guard let track = currentTrack else { return nil }
+        return currentArtist.map { "\($0) — \(track)" } ?? track
+    }
 
+    let store: StationStore
+
+    private static let lastStationKey = "lastStationID"
     private var player: AVPlayer?
     private let metadataOutput = AVPlayerItemMetadataOutput()
     private let metadataDelegate = MetadataDelegate()
     private var playerObserver: NSKeyValueObservation?
     private var itemObserver: NSKeyValueObservation?
 
-    init() {
+    init(store: StationStore) {
+        self.store = store
         setupRemoteCommands()
         metadataOutput.setDelegate(metadataDelegate, queue: .main)
-        metadataDelegate.onMetadata = { [weak self] artist, title in
-            self?.handleMetadata(artist: artist, title: title)
+        metadataDelegate.owner = self
+        if let raw = UserDefaults.standard.string(forKey: Self.lastStationKey),
+           let id = UUID(uuidString: raw),
+           let station = store.stations.first(where: { $0.id == id }) {
+            currentStation = station
         }
     }
 
@@ -64,6 +74,7 @@ final class PlayerManager: ObservableObject {
         player?.play()
 
         currentStation = station
+        UserDefaults.standard.set(station.id.uuidString, forKey: Self.lastStationKey)
         currentArtist = nil
         currentTrack = nil
         errorMessage = nil
@@ -129,7 +140,7 @@ final class PlayerManager: ObservableObject {
         itemObserver = nil
     }
 
-    private func handleMetadata(artist: String?, title: String?) {
+    fileprivate func handleMetadata(artist: String?, title: String?) {
         guard let title, !title.isEmpty else { return }
         currentArtist = artist?.isEmpty == false ? artist : nil
         currentTrack = title

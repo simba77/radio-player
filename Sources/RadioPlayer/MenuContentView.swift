@@ -19,8 +19,7 @@ struct MenuContentView: View {
             Text(error)
                 .font(.caption)
                 .foregroundStyle(.red)
-        } else if let track = player.currentTrack {
-            let label = player.currentArtist.map { "\($0) — \(track)" } ?? track
+        } else if let label = player.formattedTrack {
             Button {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(label, forType: .string)
@@ -64,7 +63,7 @@ struct MenuContentView: View {
 
         Button("Настройки...") {
             openWindow(id: "settings")
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
         }
 
         Button("Quit") {

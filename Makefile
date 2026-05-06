@@ -31,6 +31,7 @@ build: $(ICNS)
 	cp Resources/Info.plist $(APP)/Contents/
 	cp $(ICNS) $(APP)/Contents/Resources/
 	printf 'APPL????' > $(APP)/Contents/PkgInfo
+	codesign --force --deep --sign - $(APP)
 
 run: build
 	open $(APP)
@@ -39,6 +40,8 @@ install: build
 	rm -rf /Applications/$(APP)
 	cp -r $(APP) /Applications/
 	xattr -cr /Applications/$(APP)
+	codesign --force --deep --sign - /Applications/$(APP)
+	open /Applications/$(APP)
 
 clean:
 	rm -rf .build $(APP) Resources/AppIcon.iconset Resources/AppIcon.png
