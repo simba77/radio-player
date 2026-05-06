@@ -11,7 +11,15 @@ struct MenuContentView: View {
         Text(player.isPlaying ? "▶ \(currentName)" : currentName)
             .foregroundStyle(.secondary)
 
-        if let track = player.currentTrack {
+        if player.isLoading {
+            Text("Загрузка...")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if let error = player.errorMessage {
+            Text(error)
+                .font(.caption)
+                .foregroundStyle(.red)
+        } else if let track = player.currentTrack {
             let label = player.currentArtist.map { "\($0) — \(track)" } ?? track
             Button {
                 NSPasteboard.general.clearContents()

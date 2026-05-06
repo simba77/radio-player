@@ -1,6 +1,11 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Подход к разработке
+
+- **Состояния, а не только happy path.** Каждая фича требует обработки ошибок, загрузки и граничных случаев. Если добавляется воспроизведение — нужны `isLoading` и `errorMessage`. Если добавляется список — нужно состояние «пусто».
+- **Консистентность состояния.** Если `isPlaying = true`, что-то обязано играть. Наблюдение за реальным состоянием плеера (`timeControlStatus`, `item.status`) важнее оптимистичных флагов.
+- **Жизненный цикл ресурсов.** Каждый observer, output, notification — должен сниматься явно. Паттерн: `stopObserving()` перед любым `play()` и в `stop()`.
+- **Попутные баги — фиксить.** Если при работе над задачей обнаружен баг — исправить и указать в описании.
 
 ## Build & Run
 
@@ -16,10 +21,6 @@ make icon     # перегенерировать Resources/AppIcon.icns из scr
 
 ## Архитектура
 
-macOS menu bar приложение на SwiftUI + Swift 6. Все 6 исходников живут в `Sources/RadioPlayer/`.
-
-**Точка входа** — `RadioPlayerApp` (`@main`): два Scene — `MenuBarExtra` (меню в трее) и `Window` (настройки).
-
 **Ключевые классы:**
 
 - `PlayerManager` — единственный `@StateObject` в `RadioPlayerApp`. Владеет `AVPlayer`, управляет воспроизведением, регистрирует remote commands (play/pause/next/prev через `MPRemoteCommandCenter`) и обновляет `MPNowPlayingInfoCenter`. Передаётся в `MenuContentView` через `environmentObject`.
@@ -31,7 +32,18 @@ macOS menu bar приложение на SwiftUI + Swift 6. Все 6 исход�
 
 ## Swift 6 / Concurrency
 
-Проект компилируется в режиме Swift 6 strict concurrency. Весь UI-код и менеджеры помечены `@MainActor`. Remote command callbacks диспетчеризуют на главный актор через `Task { @MainActor in ... }`.
+- Когда нужно передать non-Sendable тип Apple (например `AVMetadataItem`) через границу изоляции — оборачиваем в `private struct SendableMetadataItem: @unchecked Sendable`. Это безопасно для read-only объектов.
+- Для свойств-замыканий, которые задаются один раз в `init` и не меняются — `nonisolated(unsafe) var`.
+- KVO через `NSKeyValueObservation`: коллбек захватывает только `Sendable`-значения (enum, Error), результат диспетчеризуется через `Task { @MainActor [weak self] in ... }`. Наблюдатели хранятся как `NSKeyValueObservation?`-свойства — присвоение `nil` автоматически инвалидирует наблюдение.
+
+## Обработка состояний AVPlayer
+
+`PlayerManager` наблюдает за двумя KVO-свойствами после каждого `play()`:
+
+- `AVPlayer.timeControlStatus` → управляет `isLoading` (`.waitingToPlayAtSpecifiedRate` = буферизация, `.playing` = готов)
+- `AVPlayerItem.status` → при `.failed` сбрасывает `isPlaying = false` и выставляет `errorMessage`
+
+Перед каждым `play()` и в `stop()` вызывается `stopObserving()` (обнуляет оба наблюдателя) и `remove(metadataOutput)` с текущего item'а. Это обязательно — `AVPlayerItemOutput` может быть привязан только к одному item одновременно.
 
 ## Info.plist
 

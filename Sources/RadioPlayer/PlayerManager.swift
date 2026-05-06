@@ -30,6 +30,8 @@ private final class MetadataDelegate: NSObject, AVPlayerItemMetadataOutputPushDe
 @MainActor
 final class PlayerManager: ObservableObject {
     @Published var isPlaying = false
+    @Published var isLoading = false
+    @Published var errorMessage: String?
     @Published var currentStation: Station?
     @Published var currentArtist: String?
     @Published var currentTrack: String?
@@ -39,6 +41,8 @@ final class PlayerManager: ObservableObject {
     private var player: AVPlayer?
     private let metadataOutput = AVPlayerItemMetadataOutput()
     private let metadataDelegate = MetadataDelegate()
+    private var playerObserver: NSKeyValueObservation?
+    private var itemObserver: NSKeyValueObservation?
 
     init() {
         setupRemoteCommands()
@@ -50,23 +54,32 @@ final class PlayerManager: ObservableObject {
 
     func play(station: Station) {
         guard let url = station.streamURL else { return }
+        stopObserving()
         player?.pause()
         player?.currentItem?.remove(metadataOutput)
+
         let item = AVPlayerItem(url: url)
         item.add(metadataOutput)
         player = AVPlayer(playerItem: item)
         player?.play()
+
         currentStation = station
         currentArtist = nil
         currentTrack = nil
+        errorMessage = nil
+        isLoading = true
         isPlaying = true
         updateNowPlayingInfo()
+        observePlayback()
     }
 
     func stop() {
+        stopObserving()
         player?.pause()
+        player?.currentItem?.remove(metadataOutput)
         player = nil
         isPlaying = false
+        isLoading = false
         updateNowPlayingInfo()
     }
 
@@ -78,6 +91,42 @@ final class PlayerManager: ObservableObject {
         } else if let first = store.stations.first {
             play(station: first)
         }
+    }
+
+    private func observePlayback() {
+        playerObserver = player?.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+            let status = player.timeControlStatus
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch status {
+                case .playing:
+                    self.isLoading = false
+                case .waitingToPlayAtSpecifiedRate:
+                    self.isLoading = true
+                case .paused:
+                    break
+                @unknown default:
+                    break
+                }
+            }
+        }
+
+        itemObserver = player?.currentItem?.observe(\.status, options: [.new]) { [weak self] item, _ in
+            let status = item.status
+            let error = item.error
+            Task { @MainActor [weak self] in
+                guard let self, status == .failed else { return }
+                self.isPlaying = false
+                self.isLoading = false
+                self.errorMessage = error?.localizedDescription ?? "Не удалось воспроизвести поток"
+                self.updateNowPlayingInfo()
+            }
+        }
+    }
+
+    private func stopObserving() {
+        playerObserver = nil
+        itemObserver = nil
     }
 
     private func handleMetadata(artist: String?, title: String?) {
