@@ -3,7 +3,7 @@ BIN_DIR = .build/release
 BIN     = $(BIN_DIR)/RadioPlayer
 ICNS    = Resources/AppIcon.icns
 
-.PHONY: build run install clean icon
+.PHONY: build run install clean icon lint
 
 icon: $(ICNS)
 
@@ -42,6 +42,9 @@ install: build
 	xattr -cr /Applications/$(APP)
 	codesign --force --deep --sign - /Applications/$(APP)
 	open /Applications/$(APP)
+
+lint:
+	swiftlint lint
 
 clean:
 	rm -rf .build $(APP) Resources/AppIcon.iconset Resources/AppIcon.png

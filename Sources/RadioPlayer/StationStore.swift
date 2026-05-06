@@ -10,9 +10,8 @@ final class StationStore: ObservableObject {
 
     init() {
         if let data = UserDefaults.standard.data(forKey: Self.defaultsKey),
-           let decoded = try? JSONDecoder().decode([Station].self, from: data),
-           !decoded.isEmpty
-        {
+            let decoded = try? JSONDecoder().decode([Station].self, from: data),
+            !decoded.isEmpty {
             stations = decoded
         } else {
             stations = Station.defaults

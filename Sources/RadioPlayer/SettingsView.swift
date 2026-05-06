@@ -72,7 +72,7 @@ private struct StationsSettingsView: View {
 
                 Button {
                     guard let sel = selection,
-                          let idx = store.stations.firstIndex(where: { $0.id == sel })
+                        let idx = store.stations.firstIndex(where: { $0.id == sel })
                     else { return }
                     store.stations.remove(at: idx)
                     selection = nil

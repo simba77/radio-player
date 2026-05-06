@@ -9,15 +9,18 @@ private struct SendableMetadataItem: @unchecked Sendable {
 private final class MetadataDelegate: NSObject, AVPlayerItemMetadataOutputPushDelegate {
     nonisolated(unsafe) weak var owner: PlayerManager?
 
-    func metadataOutput(_ output: AVPlayerItemMetadataOutput,
-                        didOutputTimedMetadataGroups groups: [AVTimedMetadataGroup],
-                        from track: AVPlayerItemTrack?) {
+    func metadataOutput(
+        _ output: AVPlayerItemMetadataOutput,
+        didOutputTimedMetadataGroups groups: [AVTimedMetadataGroup],
+        from track: AVPlayerItemTrack?
+    ) {
         let items = groups.flatMap(\.items)
-        let titleRef = items.first(where: {
+        let titleItem = items.first {
             $0.commonKey == .commonKeyTitle ||
             ($0.keySpace == AVMetadataKeySpace(rawValue: "icy") && ($0.key as? String) == "StreamTitle")
-        }).map(SendableMetadataItem.init)
-        let artistRef = items.first(where: { $0.commonKey == .commonKeyArtist })
+        }
+        let titleRef = titleItem.map(SendableMetadataItem.init)
+        let artistRef = items.first { $0.commonKey == .commonKeyArtist }
             .map(SendableMetadataItem.init)
         Task {
             let title = (try? await titleRef?.item.load(.stringValue))?.trimmingCharacters(in: .whitespaces)
@@ -56,8 +59,8 @@ final class PlayerManager: ObservableObject {
         metadataOutput.setDelegate(metadataDelegate, queue: .main)
         metadataDelegate.owner = self
         if let raw = UserDefaults.standard.string(forKey: Self.lastStationKey),
-           let id = UUID(uuidString: raw),
-           let station = store.stations.first(where: { $0.id == id }) {
+            let id = UUID(uuidString: raw),
+            let station = store.stations.first(where: { $0.id == id }) {
             currentStation = station
         }
     }
@@ -140,6 +143,7 @@ final class PlayerManager: ObservableObject {
         itemObserver = nil
     }
 
+    // swiftlint:disable:next strict_fileprivate
     fileprivate func handleMetadata(artist: String?, title: String?) {
         guard let title, !title.isEmpty else { return }
         currentArtist = artist?.isEmpty == false ? artist : nil
@@ -189,7 +193,7 @@ final class PlayerManager: ObservableObject {
     private func playNextStation() {
         let stations = store.stations
         guard let current = currentStation,
-              let idx = stations.firstIndex(where: { $0.id == current.id }) else {
+            let idx = stations.firstIndex(where: { $0.id == current.id }) else {
             if let first = stations.first { play(station: first) }
             return
         }
@@ -199,7 +203,7 @@ final class PlayerManager: ObservableObject {
     private func playPreviousStation() {
         let stations = store.stations
         guard let current = currentStation,
-              let idx = stations.firstIndex(where: { $0.id == current.id }) else {
+            let idx = stations.firstIndex(where: { $0.id == current.id }) else {
             if let first = stations.first { play(station: first) }
             return
         }
@@ -211,7 +215,7 @@ final class PlayerManager: ObservableObject {
         if isPlaying, let station = currentStation {
             var info: [String: Any] = [
                 MPNowPlayingInfoPropertyPlaybackRate: 1.0,
-                MPNowPlayingInfoPropertyIsLiveStream: true,
+                MPNowPlayingInfoPropertyIsLiveStream: true
             ]
             if let track = currentTrack {
                 info[MPMediaItemPropertyTitle] = track
@@ -225,7 +229,7 @@ final class PlayerManager: ObservableObject {
         } else {
             center.nowPlayingInfo = [
                 MPMediaItemPropertyTitle: currentStation?.name ?? "Radio Player",
-                MPNowPlayingInfoPropertyIsLiveStream: true,
+                MPNowPlayingInfoPropertyIsLiveStream: true
             ]
             center.playbackState = .paused
         }
