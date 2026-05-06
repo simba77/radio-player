@@ -1,0 +1,6 @@
+.build/
+RadioPlayer.app/
+.DS_Store
+.swiftpm/
+Resources/AppIcon.iconset/
+Resources/AppIcon.png
