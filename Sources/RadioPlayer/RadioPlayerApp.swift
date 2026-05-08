@@ -20,7 +20,7 @@ struct RadioPlayerApp: App {
                 ? "antenna.radiowaves.left.and.right"
                 : "antenna.radiowaves.left.and.right.slash")
         }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
 
         Window("Настройки", id: "settings") {
             SettingsView()

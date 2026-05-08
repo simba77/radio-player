@@ -51,6 +51,7 @@ final class PlayerManager: ObservableObject {
     @Published var currentStation: Station?
     @Published var currentArtist: String?
     @Published var currentTrack: String?
+    @Published var currentArtworkImage: NSImage?
     private var currentArtworkData: Data?
 
     var formattedTrack: String? {
@@ -96,6 +97,7 @@ final class PlayerManager: ObservableObject {
         currentArtist = nil
         currentTrack = nil
         currentArtworkData = nil
+        currentArtworkImage = nil
         currentArtworkURL = nil
         errorMessage = nil
         isLoading = true
@@ -173,9 +175,10 @@ final class PlayerManager: ObservableObject {
     }
 
     private func loadArtwork(from urlString: String) async {
-        guard let url = URL(string: urlString),
-              let (data, _) = try? await URLSession.shared.data(from: url) else { return }
+        guard let url = URL(string: urlString) else { return }
+        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return }
         currentArtworkData = data
+        currentArtworkImage = NSImage(data: data)
         updateNowPlayingInfo()
     }
 
@@ -218,7 +221,7 @@ final class PlayerManager: ObservableObject {
         }
     }
 
-    private func playNextStation() {
+    func playNextStation() {
         let stations = store.stations
         guard let current = currentStation,
             let idx = stations.firstIndex(where: { $0.id == current.id }) else {
@@ -228,7 +231,7 @@ final class PlayerManager: ObservableObject {
         play(station: stations[(idx + 1) % stations.count])
     }
 
-    private func playPreviousStation() {
+    func playPreviousStation() {
         let stations = store.stations
         guard let current = currentStation,
             let idx = stations.firstIndex(where: { $0.id == current.id }) else {
