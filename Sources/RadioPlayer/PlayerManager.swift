@@ -1,4 +1,5 @@
 import AVFoundation
+import AppKit
 import MediaPlayer
 import Foundation
 
@@ -15,17 +16,29 @@ private final class MetadataDelegate: NSObject, AVPlayerItemMetadataOutputPushDe
         from track: AVPlayerItemTrack?
     ) {
         let items = groups.flatMap(\.items)
+
         let titleItem = items.first {
             $0.commonKey == .commonKeyTitle ||
             ($0.keySpace == AVMetadataKeySpace(rawValue: "icy") && ($0.key as? String) == "StreamTitle")
         }
+        let artistItem = items.first { $0.commonKey == .commonKeyArtist }
+        // Cover URL arrives as WXXX with an absolute https:// URL; the other WXXX is a relative metadata path
+        let wxxxRefs = items.filter { ($0.key as? String) == "WXXX" }.map(SendableMetadataItem.init)
+
         let titleRef = titleItem.map(SendableMetadataItem.init)
-        let artistRef = items.first { $0.commonKey == .commonKeyArtist }
-            .map(SendableMetadataItem.init)
+        let artistRef = artistItem.map(SendableMetadataItem.init)
+
         Task {
             let title = (try? await titleRef?.item.load(.stringValue))?.trimmingCharacters(in: .whitespaces)
             let artist = (try? await artistRef?.item.load(.stringValue))?.trimmingCharacters(in: .whitespaces)
-            await owner?.handleMetadata(artist: artist, title: title)
+            var coverURL: String?
+            for ref in wxxxRefs {
+                if let str = try? await ref.item.load(.stringValue), str.hasPrefix("https://") {
+                    coverURL = str
+                    break
+                }
+            }
+            await owner?.handleMetadata(artist: artist, title: title, coverURL: coverURL)
         }
     }
 }
@@ -38,6 +51,7 @@ final class PlayerManager: ObservableObject {
     @Published var currentStation: Station?
     @Published var currentArtist: String?
     @Published var currentTrack: String?
+    private var currentArtworkData: Data?
 
     var formattedTrack: String? {
         guard let track = currentTrack else { return nil }
@@ -52,6 +66,7 @@ final class PlayerManager: ObservableObject {
     private let metadataDelegate = MetadataDelegate()
     private var playerObserver: NSKeyValueObservation?
     private var itemObserver: NSKeyValueObservation?
+    private var currentArtworkURL: String?
 
     init(store: StationStore) {
         self.store = store
@@ -80,6 +95,8 @@ final class PlayerManager: ObservableObject {
         UserDefaults.standard.set(station.id.uuidString, forKey: Self.lastStationKey)
         currentArtist = nil
         currentTrack = nil
+        currentArtworkData = nil
+        currentArtworkURL = nil
         errorMessage = nil
         isLoading = true
         isPlaying = true
@@ -144,10 +161,21 @@ final class PlayerManager: ObservableObject {
     }
 
     // swiftlint:disable:next strict_fileprivate
-    fileprivate func handleMetadata(artist: String?, title: String?) {
+    fileprivate func handleMetadata(artist: String?, title: String?, coverURL: String?) {
         guard let title, !title.isEmpty else { return }
         currentArtist = artist?.isEmpty == false ? artist : nil
         currentTrack = title
+        if let coverURL, coverURL != currentArtworkURL {
+            currentArtworkURL = coverURL
+            Task { await loadArtwork(from: coverURL) }
+        }
+        updateNowPlayingInfo()
+    }
+
+    private func loadArtwork(from urlString: String) async {
+        guard let url = URL(string: urlString),
+              let (data, _) = try? await URLSession.shared.data(from: url) else { return }
+        currentArtworkData = data
         updateNowPlayingInfo()
     }
 
@@ -210,6 +238,13 @@ final class PlayerManager: ObservableObject {
         play(station: stations[(idx - 1 + stations.count) % stations.count])
     }
 
+    private nonisolated static func makeArtwork(from data: Data) -> MPMediaItemArtwork? {
+        guard let image = NSImage(data: data) else { return nil }
+        return MPMediaItemArtwork(boundsSize: image.size) { _ in
+            NSImage(data: data) ?? NSImage()
+        }
+    }
+
     private func updateNowPlayingInfo() {
         let center = MPNowPlayingInfoCenter.default()
         if isPlaying, let station = currentStation {
@@ -223,6 +258,9 @@ final class PlayerManager: ObservableObject {
                 info[MPMediaItemPropertyAlbumTitle] = station.name
             } else {
                 info[MPMediaItemPropertyTitle] = station.name
+            }
+            if let artworkData = currentArtworkData {
+                info[MPMediaItemPropertyArtwork] = Self.makeArtwork(from: artworkData)
             }
             center.nowPlayingInfo = info
             center.playbackState = .playing
