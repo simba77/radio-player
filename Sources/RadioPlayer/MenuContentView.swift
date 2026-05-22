@@ -87,7 +87,9 @@ private struct NowPlayingWidget: View {
                         player.playPreviousStation()
                     }
                     controlButton(
-                        player.isLoading ? "stop.circle" : (player.isPlaying ? "pause.fill" : "play.fill"),
+                        (player.isLoading || player.isReconnecting)
+                            ? "stop.circle"
+                            : (player.isPlaying ? "pause.fill" : "play.fill"),
                         font: .title3
                     ) {
                         player.togglePlay()
@@ -102,6 +104,7 @@ private struct NowPlayingWidget: View {
     }
 
     private var trackTitle: String {
+        if player.isReconnecting { return "Переподключение..." }
         if player.isLoading { return "Загрузка..." }
         return player.currentTrack ?? player.currentStation?.name ?? "Не играет"
     }

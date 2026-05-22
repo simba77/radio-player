@@ -2,6 +2,7 @@ import AVFoundation
 import AppKit
 import MediaPlayer
 import Foundation
+import Network
 
 private struct SendableMetadataItem: @unchecked Sendable {
     let item: AVMetadataItem
@@ -47,6 +48,9 @@ private final class MetadataDelegate: NSObject, AVPlayerItemMetadataOutputPushDe
 final class PlayerManager: ObservableObject {
     @Published var isPlaying = false
     @Published var isLoading = false
+    @Published var isReconnecting = false
+    /// Переключается таймером во время переподключения — для мигания иконки в строке меню.
+    @Published var statusBlink = false
     @Published var errorMessage: String?
     @Published var currentStation: Station?
     @Published var currentArtist: String?
@@ -69,11 +73,25 @@ final class PlayerManager: ObservableObject {
     private var itemObserver: NSKeyValueObservation?
     private var currentArtworkURL: String?
 
+    /// Намерение играть: остаётся true при обрыве сети, сбрасывается только явным stop().
+    private var shouldBePlaying = false
+    private var reconnectTask: Task<Void, Never>?
+    private var stallWatchdog: Task<Void, Never>?
+    private var blinkTask: Task<Void, Never>?
+    private static let blinkInterval: Duration = .milliseconds(600)
+    private let networkMonitor = NWPathMonitor()
+    private let monitorQueue = DispatchQueue(label: "radioplayer.network.monitor")
+    /// Пауза между попытками переподключения (без backoff — фиксированный интервал).
+    private static let reconnectInterval: Duration = .seconds(3)
+    /// Сколько ждём выхода из буферизации, прежде чем считать поток зависшим.
+    private static let stallTimeout: Duration = .seconds(6)
+
     init(store: StationStore) {
         self.store = store
         setupRemoteCommands()
         metadataOutput.setDelegate(metadataDelegate, queue: .main)
         metadataDelegate.owner = self
+        startNetworkMonitor()
         if let raw = UserDefaults.standard.string(forKey: Self.lastStationKey),
             let id = UUID(uuidString: raw),
             let station = store.stations.first(where: { $0.id == id }) {
@@ -82,6 +100,24 @@ final class PlayerManager: ObservableObject {
     }
 
     func play(station: Station) {
+        currentStation = station
+        UserDefaults.standard.set(station.id.uuidString, forKey: Self.lastStationKey)
+        currentArtist = nil
+        currentTrack = nil
+        currentArtworkData = nil
+        currentArtworkImage = nil
+        currentArtworkURL = nil
+        errorMessage = nil
+
+        shouldBePlaying = true
+        cancelReconnect()
+        isReconnecting = false
+        loadAndPlay(station: station)
+    }
+
+    /// Создаёт новый item и запускает воспроизведение. Не трогает намерение и метаданные —
+    /// используется и при первом запуске, и при каждом переподключении.
+    private func loadAndPlay(station: Station) {
         guard let url = station.streamURL else { return }
         stopObserving()
         player?.pause()
@@ -92,14 +128,6 @@ final class PlayerManager: ObservableObject {
         player = AVPlayer(playerItem: item)
         player?.play()
 
-        currentStation = station
-        UserDefaults.standard.set(station.id.uuidString, forKey: Self.lastStationKey)
-        currentArtist = nil
-        currentTrack = nil
-        currentArtworkData = nil
-        currentArtworkImage = nil
-        currentArtworkURL = nil
-        errorMessage = nil
         isLoading = true
         isPlaying = true
         updateNowPlayingInfo()
@@ -107,12 +135,16 @@ final class PlayerManager: ObservableObject {
     }
 
     func stop() {
+        shouldBePlaying = false
+        cancelReconnect()
+        stopBlinking()
         stopObserving()
         player?.pause()
         player?.currentItem?.remove(metadataOutput)
         player = nil
         isPlaying = false
         isLoading = false
+        isReconnecting = false
         updateNowPlayingInfo()
     }
 
@@ -133,9 +165,10 @@ final class PlayerManager: ObservableObject {
                 guard let self else { return }
                 switch status {
                 case .playing:
-                    self.isLoading = false
+                    self.handlePlaybackStarted()
                 case .waitingToPlayAtSpecifiedRate:
                     self.isLoading = true
+                    self.armStallWatchdog()
                 case .paused:
                     break
                 @unknown default:
@@ -146,20 +179,117 @@ final class PlayerManager: ObservableObject {
 
         itemObserver = player?.currentItem?.observe(\.status, options: [.new]) { [weak self] item, _ in
             let status = item.status
-            let error = item.error
             Task { @MainActor [weak self] in
                 guard let self, status == .failed else { return }
-                self.isPlaying = false
-                self.isLoading = false
-                self.errorMessage = error?.localizedDescription ?? "Не удалось воспроизвести поток"
-                self.updateNowPlayingInfo()
+                // Для live-радио ошибка item почти всегда означает обрыв сети — переподключаемся.
+                self.beginReconnecting()
             }
         }
+    }
+
+    /// Поток реально пошёл: гасим индикаторы загрузки/переподключения и сторожевые таймеры.
+    private func handlePlaybackStarted() {
+        isLoading = false
+        if isReconnecting {
+            isReconnecting = false
+            cancelReconnect()
+            stopBlinking()
+        }
+        stallWatchdog?.cancel()
+        stallWatchdog = nil
+        errorMessage = nil
+        updateNowPlayingInfo()
     }
 
     private func stopObserving() {
         playerObserver = nil
         itemObserver = nil
+        stallWatchdog?.cancel()
+        stallWatchdog = nil
+    }
+
+    // MARK: - Reconnect
+
+    private func startNetworkMonitor() {
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            let satisfied = path.status == .satisfied
+            Task { @MainActor [weak self] in
+                self?.handleNetworkChange(satisfied: satisfied)
+            }
+        }
+        networkMonitor.start(queue: monitorQueue)
+    }
+
+    private func handleNetworkChange(satisfied: Bool) {
+        guard shouldBePlaying else { return }
+        if satisfied {
+            // Сеть вернулась — пробуем сразу, не дожидаясь интервала цикла.
+            if isReconnecting { attemptReconnect() }
+        } else {
+            beginReconnecting()
+        }
+    }
+
+    /// Помечает потерю связи и запускает бесконечный цикл переподключения.
+    private func beginReconnecting() {
+        guard shouldBePlaying, !isReconnecting else { return }
+        isReconnecting = true
+        isLoading = false
+        stallWatchdog?.cancel()
+        stallWatchdog = nil
+        updateNowPlayingInfo()
+        startBlinking()
+        startReconnectLoop()
+    }
+
+    private func startBlinking() {
+        guard blinkTask == nil else { return }
+        blinkTask = Task { @MainActor [weak self] in
+            while let self, self.isReconnecting, !Task.isCancelled {
+                self.statusBlink.toggle()
+                try? await Task.sleep(for: Self.blinkInterval)
+            }
+        }
+    }
+
+    private func stopBlinking() {
+        blinkTask?.cancel()
+        blinkTask = nil
+        statusBlink = false
+    }
+
+    private func startReconnectLoop() {
+        guard reconnectTask == nil else { return }
+        reconnectTask = Task { @MainActor [weak self] in
+            while let self, self.shouldBePlaying, self.isReconnecting, !Task.isCancelled {
+                try? await Task.sleep(for: Self.reconnectInterval)
+                guard self.shouldBePlaying, self.isReconnecting, !Task.isCancelled else { return }
+                self.attemptReconnect()
+            }
+        }
+    }
+
+    private func attemptReconnect() {
+        guard shouldBePlaying, let station = currentStation else { return }
+        loadAndPlay(station: station)
+    }
+
+    private func cancelReconnect() {
+        reconnectTask?.cancel()
+        reconnectTask = nil
+    }
+
+    /// Если буферизация затянулась дольше stallTimeout — считаем поток зависшим и переподключаемся.
+    private func armStallWatchdog() {
+        guard stallWatchdog == nil, !isReconnecting else { return }
+        stallWatchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.stallTimeout)
+            guard let self, !Task.isCancelled else { return }
+            self.stallWatchdog = nil
+            if self.shouldBePlaying, self.player?.timeControlStatus != .playing {
+                self.beginReconnecting()
+            }
+        }
     }
 
     // swiftlint:disable:next strict_fileprivate

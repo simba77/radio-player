@@ -16,9 +16,7 @@ struct RadioPlayerApp: App {
             MenuContentView()
                 .environmentObject(player)
         } label: {
-            Image(systemName: player.isPlaying
-                ? "antenna.radiowaves.left.and.right"
-                : "antenna.radiowaves.left.and.right.slash")
+            Image(systemName: statusIcon)
         }
         .menuBarExtraStyle(.window)
 
@@ -27,5 +25,17 @@ struct RadioPlayerApp: App {
                 .environmentObject(store)
         }
         .windowResizability(.contentSize)
+    }
+
+    /// Иконка строки меню: мигает во время переподключения, иначе отражает состояние воспроизведения.
+    private var statusIcon: String {
+        if player.isReconnecting {
+            return player.statusBlink
+                ? "antenna.radiowaves.left.and.right"
+                : "antenna.radiowaves.left.and.right.slash"
+        }
+        return player.isPlaying
+            ? "antenna.radiowaves.left.and.right"
+            : "antenna.radiowaves.left.and.right.slash"
     }
 }
